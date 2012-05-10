@@ -129,6 +129,9 @@ var tvDirector = function()
 		if (this.client.state.lname.length > 0)
 			track = this.client.state.lname;
 
+		if (track == 'FE2X')
+			track = 'F25';
+
 		if (track == 'FE3X')
 			track = 'F33';
 
