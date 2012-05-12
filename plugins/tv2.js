@@ -6,31 +6,10 @@ var util = require('util'),
 	kd = require('kdtree.js'),
 	stack = require('./tv/stack.js');
 
-// weighted scoring for each car
-var weightCars = {
-	'UF1': 0,
-	'XFG': 5,
-	'XRG': 5,
-	'XRT': 10,
-	'RB4': 10,
-	'FXO': 10,
-	'LX4': 10,
-	'LX6': 15,
-	'MRT': 15,
-	'FZ5': 15,
-	'XFR': 20,
-	'UFR': 18,
-	'FOX': 20,
-	'FO8': 25,
-	'BF1': 45,
-	'FXR': 30,
-	'XRR': 30,
-	'FZR': 30
-};
-
 var queue = function()
 {
 	var self = this;
+
 	self.q = new stack();
 	self.named = {};
 
@@ -67,6 +46,12 @@ var queue = function()
 			id = self.named[id];
 		return self.q.pop(id);
 	};
+
+	self.reset = function()
+	{
+		self.named = {};
+		self.q.reset();
+	}
 }
 			
 var tvDirector = function()
@@ -75,16 +60,35 @@ var tvDirector = function()
 
 	self.queue = new queue;
 
-	// an array of plyrs, and their score
-	self.plyrs = [];
+	// vehicle weighting
+	self.weighting = {
+		'UF1': 0,
+		'XFG': 1,
+		'XRG': 1,
+		'XRT': 2,
+		'RB4': 2,
+		'FXO': 2,
+		'LX4': 2,
+		'LX6': 3,
+		'MRT': 3,
+		'FZ5': 3,
+		'XFR': 4,
+		'UFR': 4,
+		'FOX': 4,
+		'FO8': 5,
+		'BF1': 7,
+		'FXR': 6,
+		'XRR': 6,
+		'FZR': 6
+	};
 
 	self.logger = null;
 	self.client = null;
 	self.insim = null;
 	self.timers = {};
 	self.history = {
-		'current': null,
-		'previous': null,
+		'current': 0,
+		'previous': 0,
 	};
 
 	self.cooldown = 5000;
@@ -115,6 +119,11 @@ var tvDirector = function()
 		this.client.on('connect', self.onConnect);
 		this.client.on('disconnect', self.onDisconnect);
 	}
+
+	self.getWeighting = function(vehicle)
+	{
+		return self.weighting[vehicle];
+	}
 	
 	self.term = function()
 	{
@@ -127,7 +136,7 @@ var tvDirector = function()
 		if (!self.logger)
 			return;
 
-		self.logger.info('TV:' + text);
+		self.logger.info('TV2:' + text);
 	}
 
 	self.nextViewpoint = function()
@@ -140,28 +149,31 @@ var tvDirector = function()
 		self.timers.next = setInterval(function()
 		{
 			var d = self.nextViewpoint();
-			if (d.plid <= 0)
+			if (!d || (d.plid <= 0))
+			{
+				console.log('skipping');	
 				return;
-
-			if (d.plid == self.history.current)
-				return;
-
-			self.history.current = d.plid;
+			}
 
 			self.log('Changing to ' + d.plid + ' for ' + d.reason);
 
 			self.change(d.plid);
-		}, 500);
+		}, self.cooldown);
 
 		self.timers.hunt = setInterval(function() {
 			self.hunt();
-		}, 5000);
+		}, self.cooldown);
+	}
+
+	self.clearTimers = function()
+	{
+		for (var i in self.timers)
+			clearTimeout(self.timers[i]);
 	}
 
 	self.onDisconnect = function()
 	{
-		clearTimeout(self.timers.next);
-		clearTimeout(self.timers.hunt);
+		self.clearTimers();
 	}
 
 	self.onFastest = function()
@@ -173,7 +185,10 @@ var tvDirector = function()
 		if (lap <= 1 || plid <= 0)
 			return;
 
-		self.queue.push({'plid': plid, 'reason': 'new fastest'}, 100, 5);
+		var score = 1 + (lap * 0.75);
+		var ttl = 10;
+
+		self.queue.push({'plid': plid, 'reason': 'new fastest'}, score, ttl);
 	}
 
 	self.onTrack = function()
@@ -209,7 +224,24 @@ var tvDirector = function()
 		var end = new Date().getTime();
 		console.log('building done in %d seconds', (end - start)/1000);
 
-		self.hunt();
+
+		var i = 0;
+		var plyrs = self.client.state.plyrs;
+
+		while (i < plyrs.length)
+		{
+			if (plyrs[i] && (plyrs[i].position == 1))
+				break;
+			i++;
+		}
+
+		if ((i > 0) && (plyrs[i]))
+		{
+			console.log('setting startmode');
+			var score = 25;
+			var ttl = -1;
+			self.queue.push({ plid: i, reason: 'startmode'}, score, ttl, 'startmode');
+		}
 	}
 
 	self.onPitLane = function(pkt)
@@ -225,15 +257,15 @@ var tvDirector = function()
 
 		if (pkt.fact == self.insim.PITLANE_SG)
 		{
-			self.queue.push({ plid: pkt.plid, reason: 'Serving drive through' }, 90, 5);
+			self.queue.push({ plid: pkt.plid, reason: 'Serving stop+go through' }, 90, 5);
 			return;
 		}
 	}
 
 	self.onContact = function(pkt)
 	{
-		if (self.isCurrent(pkt.a.plid) || self.isCurrent(pkt.b.plid))
-			return;
+		//if (self.isCurrent(pkt.a.plid) || self.isCurrent(pkt.b.plid))
+	//		return;
 
 		var plid = pkt.a.plid;
 		// focus on whoever most likely the cause
@@ -244,9 +276,17 @@ var tvDirector = function()
 		if (self.client.state.plyrs[plid].finished)
 			return;
 
+		var closingspeed = (pkt.spclose / 10);
+
 		var plyra = this.client.state.getPlyrByPlid(pkt.a.plid);
 		var plyrb = this.client.state.getPlyrByPlid(pkt.b.plid);
-		self.queue.push({ 'plid': plid, reason: 'Contact - between' + plyra.pname + ' and ' + plyrb.pname }, 50, 10);
+
+		var score = 10 + (speed * 0.15) - (self.getWeighting(plyra.cname) - self.getWeighting(plyrb.cname));
+		var ttl = 10;
+
+		console.log('Got contact between %s and %s', plyra.pname, plyrb.pname);
+
+		self.queue.push({ 'plid': plid, reason: 'Contact - between' + plyra.pname + ' and ' + plyrb.pname }, score, ttl);
 	}
 
 	self.onFlag = function(pkt)
@@ -264,10 +304,16 @@ var tvDirector = function()
 				var carbehind = this.client.state.getPlyrByPlid(pkt.carbehind);
 				var carinfront = this.client.state.getPlyrByPlid(pkt.plid);
 				if (carbehind.speed > carinfront.speed)
-					self.queue.push({ plid: pkt.carbehind, reason: 'Blue flag, going to overtaker as they are faster'}, 200, 5);
+				{
+					var score = 5 + (self.getWeighting(carbehind.cname) * 0.75) - self.getWeighting(carinfront.cname);
+					var ttl = 15;
+					self.queue.push({ plid: pkt.carbehind, reason: 'Blue flag, going to overtaker as they are faster'}, score, ttl);
+				}
 				break;
 			case self.insim.FLG_YELLOW:
-				self.queue.push({ plid: pkt.plid, reason: 'Yellow flag, going to victim' }, 250, 5);
+				var score = 5;
+				var ttl = 10;
+				self.queue.push({ plid: pkt.plid, reason: 'Yellow flag, going to victim' }, score, ttl);
 				break;
 		}
 	}
@@ -277,42 +323,35 @@ var tvDirector = function()
 		if (self.isCurrent(pkt.plid) || (self.client.state.plyrs[pkt.plid] && self.client.state.plyrs[pkt.plid].finished))
 			return;
 
+		var plyr = this.client.state.getPlyrByPlid(pkt.plid);
+
 		switch(pkt.hlvc)
 		{
 			case self.insim.HLVC_SPEED:
 				self.log('HLVC:Speeding');
-				self.queue.push({ plid: pkt.plid, reason: 'HLVC: speeding' }, 500, 5);
-				return;
+
+				plyr.HLVCinfractions++;
+				var score = 5 + (plyr.HLVCinfractions * 0.75);
+				var ttl = 10;
+
+				self.queue.push({ plid: pkt.plid, reason: 'HLVC: speeding' }, score, ttl);
 				break;
 			case self.insim.HLVC_WALL:
 				self.log('HLVC:Wall');
-				self.queue.push({ plid: pkt.plid, reason: 'HLVC: wall' }, 200, 5);
-				return;
-				break;
-			case self.insim.HLVC_GROUND:
-			default:
-				return;
+
+				plyr.HLVCinfractions++;
+				var score = 5 + (plyr.HLVCinfractions * 0.75);
+				var ttl = 10;
+
+				self.queue.push({ plid: pkt.plid, reason: 'HLVC: wall' }, score, ttl);
 				break;
 		}
 	}
 
 	self.onStart = function()
 	{
-		var i = 0;
-		var plyrs = self.client.state.plyrs;
-
-		while (i < plyrs.length)
-		{
-			if (plyrs[i].position == 1)
-				break;
-			i++;
-		}
-
-		if ((i > 0) && (plyrs[i]))
-		{
-			console.log('setting startmode');
-			self.queue.push({ plid: i, reason: 'startmode'}, -9999, 0, 'startmode');
-		}
+		console.log('Got Start');
+		self.queue.reset();
 	}
 
 	self.onLap = function(pkt)
@@ -330,7 +369,11 @@ var tvDirector = function()
 		var plyr = this.client.state.getPlyrByPlid(pkt.plid);
 
 		if (plyr.position == 1)
-			self.queue.push({ 'name': pkt.plid, reason: 'winner' }, -9999, 20);
+		{
+			var score = 20;
+			var ttl = 15;
+			self.queue.push({ 'name': pkt.plid, reason: 'winner' }, score, ttl);
+		}
 	}
 
 	self.onFinalStanding = function(pkt)
@@ -340,37 +383,22 @@ var tvDirector = function()
 			return;
 
 		// go back to play if nothing else interesting is happening
-		self.queue.push({ plid: pkt.plid, reason: 'final standing' }, 250, 5);
-	}
-
-	self.updateLast = function(plus)
-	{
-		self.last = new Date().getTime() + ((plus) ? plus : 0);
-	}
-
-	self.shouldChange = function(cooldown)
-	{
-		cooldown = cooldown || self.cooldown;
-		return (((new Date().getTime()) - self.last) > cooldown);
+		//self.queue.push({ plid: pkt.plid, reason: 'final standing' }, 250, 5);
 	}
 
 	self.isCurrent = function(plid)
 	{
-		return (self.history.current == plid);
+		return (self.history.current === plid);
 	}
 
-	self.change = function(plid, check, back)
+	self.change = function(plid)
 	{
-		if (check == undefined)
-			check = true;
-
-		back = back || false;
-
-		if (check && !self.shouldChange())
-		{
-			console.log('not changing');
-			return;
-		}
+		console.log('changed called');
+		//if (self.isCurrent(plid))
+		//{
+	//		console.log('is current, skipping');
+//			return;
+//		}
 
 		if (!self.insim || !self.client)
 		{
@@ -397,8 +425,6 @@ var tvDirector = function()
 		pkt.viewplid = plid;
 		pkt.ingamecam = cam;
 		self.client.send(pkt);
-
-		self.updateLast();
 	}
 
 	self.hunt = function()
@@ -411,19 +437,15 @@ var tvDirector = function()
 
 		for (var i in plyrs)
 		{
-			console.log("plyr %s (%d) x=%d,y=%d,z=%d", plyrs[i].pname, i, plyrs[i].x, plyrs[i].y, plyrs[i].z);
 			var nearest = self.track.nearest([ plyrs[i].x, plyrs[i].y, plyrs[i].z ], 1);
 			if (!nearest || nearest.length <= 0)
 				continue;
-
-			console.log(nearest[0].distance);
 
 			var node = nearest[0].node;
 
 			if (!grid[node.id])
 				grid[node.id] = [];
 
-			console.log('splicing in at %d', plyrs[i].position);
 			grid[node.id].splice(plyrs[i].position, 0, plyrs[i].plid);
 		}
 
@@ -433,14 +455,11 @@ var tvDirector = function()
 			{
 				if (!grid[i][j])
 				{
-					console.log('removing');
 					grid[i].splice(j, 1);
 					i--;
 				}
 			}
 		}
-
-		console.log(util.inspect(grid));
 
 		var maxId = null;
 		var maxV = 0;
@@ -453,21 +472,22 @@ var tvDirector = function()
 			}
 		}
 
-		console.log('most interesting node is ' + maxId + ' with plyrs ' + grid[maxId]);
 		var j = 0;
+		var avg = 0;
 		for (var i in grid[maxId])
 		{
-			console.log(" - %s (%d) @ pos %d", plyrs[grid[maxId][i]].pname, grid[maxId][i], plyrs[grid[maxId][i]].position);
+			avg += plyrs[grid[maxId][i]].speed;
 			j++;
 		}
 
-		var score = 100 - (-25 * j);
+		avg /= j;
+
+		var score = 5 + j + avg;
+		var ttl = 20 + (j * 0.5);
 
 		var plid = grid[maxId][Math.floor((grid[maxId].length - 1) / 2)];
-		self.queue.push({ plid: plid, reason: 'hunted' }, score, 20);
+		self.queue.push({ plid: plid, reason: 'hunted' }, score, ttl);
 	}
-
-	self.updateLast();
 };
 
 var director = new tvDirector;

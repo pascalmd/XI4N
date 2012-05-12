@@ -13,7 +13,7 @@ foreach (glob('./pth/*.pth') as $src)
 	echo 'Converted ',$src,' to ',$dst,"\n";
 }
 
-function pth2json($src, $dst, $resolution = 6)
+function pth2json($src, $dst, $resolution = 1)
 {
 	$pth = new PTH($src);
 
@@ -32,7 +32,6 @@ function pth2json($src, $dst, $resolution = 6)
 		if ($i == $pth->FinishLine)
 			$data['startfinish'] = array('x' => $n->Center->X, 'y' => $n->Center->Y, 'z' => $n->Center->Z);
 
-		if ($i % $resolution)
 			$data['nodes'][] = array('x' => $n->Center->X, 'y' => $n->Center->Y, 'z' => $n->Center->Z);
 		$i++;
 	}

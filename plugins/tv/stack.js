@@ -4,7 +4,7 @@
 {
 
 /*
- * Simple stack implementation that orders by priority, lower the number the
+ * Simple stack implementation that orders by priority, higher the number the
  * higher it's position. It also understands the idea of expiring items.
  * Expiring items should be set by the number of seconds lifetime.
  * Manually accessing the stack variable will result in Bad Things(tm)
@@ -55,7 +55,7 @@ var Stack = function()
 
 		self.stack.sort(function(a, b)
 		{
-			return a.priority - b.priority;
+			return b.priority - a.priority;
 		});
 	};
 
