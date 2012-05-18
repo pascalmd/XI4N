@@ -41,7 +41,10 @@ var Stack = function()
 		{
 			// infinite lifetime when <= 0
 			if (e.expires <= 0)
+			{
+				console.log('e.expires <= 0 %d', e.id);
 				return true; 
+			}
 
 			return (e.expires > now);
 		});

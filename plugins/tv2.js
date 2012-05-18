@@ -30,6 +30,7 @@ var queue = function()
 
 	self.push = function(plid, priority, expires, named)
 	{
+		console.log('pushing %s', named);
 		var id = self.q.push(plid, priority, expires);
 		if (named)
 		{
@@ -51,6 +52,11 @@ var queue = function()
 	{
 		self.named = {};
 		self.q.reset();
+	}
+
+	self.all = function()
+	{
+		return self.q.stack;
 	}
 }
 			
@@ -91,7 +97,16 @@ var tvDirector = function()
 		'previous': 0,
 	};
 
-	self.cooldown = 5000;
+	self.cooldown = 10000;
+
+	var http = require("http");
+
+	http.createServer(function(request, response) {
+		response.statusCode = 200;
+    	response.setHeader("Content-Type", "text/html");
+	    response.write(JSON.stringify(self.queue.all()));
+    	response.end();
+	}).listen(8081);
 
 	self.init = function()
 	{
@@ -108,6 +123,7 @@ var tvDirector = function()
 		this.client.on('state:best', self.onFastest);
 		this.client.on('state:track', self.onTrack);
 		this.client.on('state:race', self.onStart);
+		this.client.on('IS_RST', self.onStart);
 		this.client.on('IS_LAP', self.onLap);
 		this.client.on('IS_PLA', self.onPitLane);
 		this.client.on('IS_CON', self.onContact);
@@ -223,25 +239,6 @@ var tvDirector = function()
 		self.track.build(translated);
 		var end = new Date().getTime();
 		console.log('building done in %d seconds', (end - start)/1000);
-
-
-		var i = 0;
-		var plyrs = self.client.state.plyrs;
-
-		while (i < plyrs.length)
-		{
-			if (plyrs[i] && (plyrs[i].position == 1))
-				break;
-			i++;
-		}
-
-		if ((i > 0) && (plyrs[i]))
-		{
-			console.log('setting startmode');
-			var score = 25;
-			var ttl = -1;
-			self.queue.push({ plid: i, reason: 'startmode'}, score, ttl, 'startmode');
-		}
 	}
 
 	self.onPitLane = function(pkt)
@@ -281,7 +278,7 @@ var tvDirector = function()
 		var plyra = this.client.state.getPlyrByPlid(pkt.a.plid);
 		var plyrb = this.client.state.getPlyrByPlid(pkt.b.plid);
 
-		var score = 10 + (speed * 0.15) - (self.getWeighting(plyra.cname) - self.getWeighting(plyrb.cname));
+		var score = 10 + (closingspeed * 0.15) - (self.getWeighting(plyra.cname) - self.getWeighting(plyrb.cname));
 		var ttl = 10;
 
 		console.log('Got contact between %s and %s', plyra.pname, plyrb.pname);
@@ -324,6 +321,8 @@ var tvDirector = function()
 			return;
 
 		var plyr = this.client.state.getPlyrByPlid(pkt.plid);
+		if (!plyr.HLVCinfractions)
+			plyr.HLVCinfractions = 0;
 
 		switch(pkt.hlvc)
 		{
@@ -352,6 +351,31 @@ var tvDirector = function()
 	{
 		console.log('Got Start');
 		self.queue.reset();
+
+		var ctx = this;
+
+		setTimeout(function()
+		{
+			console.log('startmode callback');
+			console.log(ctx.client.state);
+			var plyrs = ctx.client.state.plyrs;
+			for (var i in plyrs)
+			{
+				if (!plyrs[i])
+					continue;
+
+				console.log('plyrs i=%d, pname=%s, position=%d', i, plyrs[i].pname, plyrs[i].position);
+				if (plyrs[i] && (plyrs[i].position == 1))
+				{
+					var score = 30;
+					var ttl = -1;
+					console.log('setting startmode plid=%d', plyrs[i].plid);
+					self.queue.push({ plid: plyrs[i].plid, reason: 'startmode' }, score, ttl, 'startmode');
+					return;
+				}
+				i++;
+			}
+		}, 4000);
 	}
 
 	self.onLap = function(pkt)
@@ -393,7 +417,7 @@ var tvDirector = function()
 
 	self.change = function(plid)
 	{
-		console.log('changed called');
+		self.log('change called');
 		//if (self.isCurrent(plid))
 		//{
 	//		console.log('is current, skipping');
@@ -480,10 +504,15 @@ var tvDirector = function()
 			j++;
 		}
 
+		if (j <= 0)
+			return;
+
 		avg /= j;
 
 		var score = 5 + j + avg;
 		var ttl = 20 + (j * 0.5);
+
+		console.log('Score=%d', score);
 
 		var plid = grid[maxId][Math.floor((grid[maxId].length - 1) / 2)];
 		self.queue.push({ plid: plid, reason: 'hunted' }, score, ttl);
