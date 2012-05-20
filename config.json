@@ -32,6 +32,10 @@
 		"tv2": {
 			"path": "tv2",
 			"options": {}
+		},
+		"monitor": {
+			"path": "monitor",
+			"options": { "http": true }
 		}
 	},
 
