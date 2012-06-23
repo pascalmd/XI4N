@@ -141,7 +141,7 @@
 
 				if (plyr.pitting || (plyr.position <= 0) && (row.length > 0))
 				{
-					row.remove();
+					track.clearPlyr(plid);
 					return;
 				}
 
@@ -380,7 +380,8 @@
 				track.scavengePlyrs();
 
 				// reset starting positions
-				track.resetPlyrStartPos();
+				// note: track hasn't as resetPlyrStartPos method yet
+				//track.resetPlyrStartPos();
 			});
 
 			// player chat

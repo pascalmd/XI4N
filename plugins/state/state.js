@@ -532,6 +532,9 @@ ClientState.prototype = {
 		self.plyrs[pkt.plid].pitting = true;
 		self.plyrs[pkt.plid].position_original = 0;
 
+		// in case player tele-pits during pitstop
+		self.plyrs[pkt.plid].pitstop = false;
+
 		// emit our custom event
 		this.client.emit('state:plyrupdate', [ pkt.plid ]);
 	},
